@@ -1,0 +1,16 @@
+{
+  "name": "bas-schematics-graphics-flow",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared tracker for BAS controller schematics, submittals and station graphics (Firebase + Netlify).",
+  "scripts": {
+    "build": "esbuild src/firebase-entry.js --bundle --format=esm --platform=browser --minify --outfile=public/vendor/firebase.js"
+  },
+  "dependencies": {
+    "firebase": "12.19.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.24.2"
+  }
+}
