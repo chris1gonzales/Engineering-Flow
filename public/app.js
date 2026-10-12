@@ -5,7 +5,7 @@ const STAT_LABEL = { waiting: "Waiting", todo: "Ready", progress: "In progress",
 
 const S = {
   me: null, team: [], projects: [], pid: null, proj: null, log: [],
-  expanded: new Set(), mine: false, drafts: {}, assignRole: null,
+  expanded: new Set(), mine: false, drafts: {}, picker: null,
   showNew: false, confirmArchive: false, online: navigator.onLine, loaded: false,
 };
 
@@ -139,7 +139,13 @@ function effStatus(p, s) {
   if (s.deps.some((x) => !depOk(p, x))) return "waiting";
   return d.status === "progress" || d.status === "blocked" ? d.status : "todo";
 }
-const teamMember = (p, role) => (p && p.team && p.team[role]) || null;
+// Assignments: each role holds a list of people (the default for its steps);
+// a step can override with its own list. Older single-person data still reads.
+const asList = (v) => (Array.isArray(v) ? v : v ? [v] : []).filter((m) => m && (m.id || m.label));
+const sameMember = (a, b) => (a.id ? a.id === b.id : !b.id && a.label === b.label);
+const roleMembers = (p, role) => asList(p && p.team && p.team[role]);
+const stepIsCustom = (p, sid) => Array.isArray(stepData(p, sid).assignees);
+const stepAssignees = (p, s) => (stepIsCustom(p, s.id) ? asList(stepData(p, s.id).assignees) : roleMembers(p, s.role));
 const userById = (id) => S.team.find((u) => u.id === id);
 function personName(m, fallback) {
   if (!m) return "";
@@ -153,8 +159,12 @@ function avatarHTML(m, fallback) {
   const key = (m && (m.id || m.label)) || n;
   return `<span class="av" style="background:hsl(${hue(key)} 45% 42%);color:#fff">${esc(initials)}</span>`;
 }
-const whoHTML = (p, role) => { const m = teamMember(p, role); return m ? `<span class="who">${avatarHTML(m)}${esc(personName(m))}</span>` : `<span class="muted">Unassigned</span>`; };
-const isMine = (p, s) => { const m = teamMember(p, s.role); return !!(m && m.id && S.me && m.id === S.me.id); };
+function whoListHTML(list) {
+  if (!list.length) return `<span class="muted">Unassigned</span>`;
+  const names = list.slice(0, 2).map((m) => personName(m)).join(", ") + (list.length > 2 ? ` +${list.length - 2}` : "");
+  return `<span class="who"><span class="avs">${list.slice(0, 3).map((m) => avatarHTML(m)).join("")}</span>${esc(names)}</span>`;
+}
+const isMine = (p, s) => !!S.me && stepAssignees(p, s).some((m) => m.id === S.me.id);
 /* ---------------- main render ---------------- */
 function renderTop() {
   const opts = S.projects.map((x) => `<option value="${esc(x.id)}"${x.id === S.pid ? " selected" : ""}>${esc(x.number ? x.number + " · " : "")}${esc(x.name)}</option>`).join("");
@@ -214,14 +224,14 @@ function renderMap(p) {
 function renderNext(p) {
   const open = STEPS.filter((s) => ["todo", "progress", "blocked"].includes(effStatus(p, s)));
   if (!open.length) return `<p class="muted">Nothing open. ${STEPS.every((s) => ["done", "skipped"].includes(effStatus(p, s))) ? "This project is closed out." : ""}</p>`;
-  return `<div class="next">${open.map((s) => { const st = effStatus(p, s); return `<div class="nrow"><span class="sno">${s.id.slice(1)}</span><span class="t"><b>${esc(s.title)}</b></span><span class="pill ${st}">${STAT_LABEL[st]}</span><span class="tag">${ROLE[s.role].code}</span>${whoHTML(p, s.role)}</div>`; }).join("")}</div>`;
+  return `<div class="next">${open.map((s) => { const st = effStatus(p, s); return `<div class="nrow"><span class="sno">${s.id.slice(1)}</span><span class="t"><b>${esc(s.title)}</b></span><span class="pill ${st}">${STAT_LABEL[st]}</span><span class="tag">${ROLE[s.role].code}</span>${whoListHTML(stepAssignees(p, s))}</div>`; }).join("")}</div>`;
 }
 function actText(e) {
   const s = e.sid && STEPS[SIDX[e.sid]]; const t = s ? `${s.id.slice(1)} ${s.title}` : "";
   return ({
     created: "created the project", started: "started " + t, done: "completed " + t, approved: "approved " + t,
     returned: "returned work from " + t, resubmit: "marked the submittal Revise & resubmit", blocked: "flagged " + t + " as blocked",
-    unblocked: "cleared the block on " + t, reopened: "reopened " + t, note: "noted on " + t, assigned: "updated the team",
+    unblocked: "cleared the block on " + t, reopened: "reopened " + t, note: "noted on " + t, assigned: e.sid ? "changed who's on " + t : "updated the team",
     scope: "changed the project scope", archived: "archived the project",
   })[e.act] || e.act + " " + t;
 }
@@ -239,7 +249,7 @@ function renderStep(p, s) {
   const head = `<button class="shead" data-act="toggle" data-s="${s.id}" aria-expanded="${open}">
       <span class="sno">${s.id.slice(1)}</span>
       <span style="min-width:0"><span class="stitle">${esc(s.title)}</span>
-        <span class="smeta"><span class="tag">${ROLE[s.role].code}</span>${p ? whoHTML(p, s.role) : `<span>${esc(ROLE[s.role].name)}</span>`}${kindTag}
+        <span class="smeta"><span class="tag">${ROLE[s.role].code}</span>${p ? whoListHTML(stepAssignees(p, s)) : `<span>${esc(ROLE[s.role].name)}</span>`}${kindTag}
         ${d.returned && st !== "done" ? `<span class="tag red">RETURNED</span>` : ""}
         ${s.id === "s03" && p && p.rev ? `<span class="tag">Rev ${revLetter(p.rev)}</span>` : ""}
         ${d.due ? `<span class="tag ${late ? "late" : ""}">Due ${esc(d.due)}</span>` : ""}
@@ -273,6 +283,7 @@ function renderStep(p, s) {
     <div class="sbody">
       <p class="hint" style="margin:0">${esc(s.hint)}</p>
       ${d.returned && st !== "done" && d.returnNote ? `<div class="redbox"><b>Returned:</b> ${esc(d.returnNote)}</div>` : ""}
+      ${p ? renderStepAssign(p, s) : ""}
       <ul class="checks">${s.checks.map((c, i) => `<li class="${checks[i] ? "on" : ""}"><label><input type="checkbox" id="chk_${s.id}_${i}" data-act="check" data-s="${s.id}" data-i="${i}" ${checks[i] ? "checked" : ""}${!p || st === "waiting" ? " disabled" : ""}><span>${esc(c)}</span></label></li>`).join("")}</ul>
       <div class="actions">${actions}</div>
       ${ret}
@@ -283,22 +294,36 @@ function renderStep(p, s) {
       ${hist.length ? `<div class="hist">${hist.map(logLine).join("")}</div>` : ""}` : ""}
     </div></div>`;
 }
+const pickerOpen = (kind, key) => !!S.picker && S.picker.kind === kind && S.picker.key === key;
+function memberChips(list) {
+  return list.length ? `<span class="chips">${list.map((m) => `<span class="chip">${avatarHTML(m)}${esc(personName(m))}</span>`).join("")}</span>` : `<span class="muted">Unassigned</span>`;
+}
 function renderTeam(p) {
   const rows = ROLES.map((r) => {
-    const m = teamMember(p, r.k), open = S.assignRole === r.k;
-    return `<div class="trow"><span class="rcode">${r.code}</span><div style="min-width:0"><div class="label" style="letter-spacing:.04em">${esc(r.name)}</div>${m ? `<span class="who">${avatarHTML(m)}${esc(personName(m))}</span>` : `<span class="muted">Unassigned</span>`}</div>
-      <button class="btn sm" data-act="assign" data-r="${r.k}">${open ? "Close" : m ? "Change" : "Assign"}</button></div>
-      ${open ? renderPicker() : ""}`;
+    const list = roleMembers(p, r.k), open = pickerOpen("role", r.k);
+    return `<div class="trow"><span class="rcode">${r.code}</span><div style="min-width:0"><div class="label" style="letter-spacing:.04em">${esc(r.name)}</div>${memberChips(list)}</div>
+      <button class="btn sm" data-act="assign" data-r="${r.k}">${open ? "Done" : list.length ? "Edit" : "Assign"}</button></div>
+      ${open ? renderPicker(list, "role") : ""}`;
   }).join("");
-  return `<div class="panel"><div class="panel-h"><h2>Team</h2><span class="muted" style="font-size:12.5px">Up to 5 people</span></div><div class="team">${rows}</div></div>`;
+  return `<div class="panel"><div class="panel-h"><h2>Team</h2><span class="muted" style="font-size:12.5px">Default people for each role's steps</span></div><div class="team">${rows}</div></div>`;
 }
-function renderPicker() {
+function renderStepAssign(p, s) {
+  const custom = stepIsCustom(p, s.id), list = stepAssignees(p, s), open = pickerOpen("step", s.id);
+  return `<div class="assignrow"><span class="label">Assigned</span>${memberChips(list)}
+      <span class="hint">${custom ? "Set for this step" : `From the ${esc(ROLE[s.role].name)} role`}</span>
+      <button class="btn sm" data-act="assign-step" data-s="${s.id}">${open ? "Done" : "Edit"}</button></div>
+    ${open ? renderPicker(list, "step") : ""}`;
+}
+function renderPicker(list, kind) {
   const q = (S.drafts.assign_q || "").toLowerCase();
-  const hits = S.team.filter((u) => !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)).slice(0, 8);
+  const hits = S.team.filter((u) => !q || u.name.toLowerCase().includes(q) || (u.email || "").toLowerCase().includes(q)).slice(0, 12);
+  const labels = list.filter((m) => !m.id);
   return `<div class="picker">
-    <input type="text" id="assign_q" data-act="search" placeholder="Filter team members" value="${esc(S.drafts.assign_q || "")}" autocomplete="off">
-    <div class="hits">${hits.map((h) => `<button data-act="pick-person" data-id="${esc(h.id)}">${avatarHTML({ id: h.id })}<span>${esc(h.name)} <span class="muted">${esc(h.email)}</span></span></button>`).join("") || `<span class="muted" style="font-size:12.5px;padding:2px 4px">No one matches. Add them in Firebase, or use the typed name.</span>`}</div>
-    <div class="actions"><button class="btn sm" data-act="assign-me">Assign me</button><button class="btn sm" data-act="assign-label">Use typed name</button><button class="btn sm red" data-act="assign-clear">Unassign</button></div>
+    <span class="hint">Tap people to add or remove them. ${list.length} selected.</span>
+    <input type="text" id="assign_q" data-act="search" placeholder="Filter, or type a name to add" value="${esc(S.drafts.assign_q || "")}" autocomplete="off">
+    <div class="hits">${hits.map((h) => { const on = list.some((m) => m.id === h.id); return `<button data-act="pick-person" data-id="${esc(h.id)}" aria-pressed="${on}" class="${on ? "on" : ""}"><span class="tick">${on ? "✓" : ""}</span>${avatarHTML({ id: h.id })}<span>${esc(h.name)} <span class="muted">${esc(h.email || "")}</span></span></button>`; }).join("") || `<span class="muted" style="font-size:12.5px;padding:2px 4px">No one matches. Add them in Firebase, or add the typed name.</span>`}
+    ${labels.map((m) => `<button data-act="pick-label" data-l="${esc(m.label)}" aria-pressed="true" class="on"><span class="tick">✓</span>${avatarHTML(m)}<span>${esc(m.label)} <span class="muted">typed name</span></span></button>`).join("")}</div>
+    <div class="actions"><button class="btn sm" data-act="assign-label">Add typed name</button><button class="btn sm red" data-act="assign-clear">Clear all</button>${kind === "step" ? `<button class="btn sm" data-act="assign-default">Use role default</button>` : ""}<button class="btn sm primary" data-act="assign-close">Done</button></div>
   </div>`;
 }
 function renderLog() {
@@ -377,19 +402,42 @@ $app.addEventListener("click", (e) => {
       S.drafts["ret_" + sid] = ""; returnWork(sid, note); break;
     }
     case "note": { const n = (S.drafts["note_" + sid] || "").trim(); if (!n) { toast("Type a note first."); return; } S.drafts["note_" + sid] = ""; render(); save(() => data.addNote(S.me, P(), sid, n)); break; }
-    case "assign": S.assignRole = S.assignRole === b.dataset.r ? null : b.dataset.r; S.drafts.assign_q = ""; render(); document.getElementById("assign_q")?.focus(); break;
-    case "pick-person": assign({ id: b.dataset.id }); break;
-    case "assign-me": assign({ id: S.me.id }); break;
-    case "assign-label": { const t = (S.drafts.assign_q || "").trim(); if (!t) { toast("Type the person's name first."); return; } assign({ label: t.slice(0, 60) }); break; }
-    case "assign-clear": assign(null); break;
+    case "assign": openPicker("role", b.dataset.r); break;
+    case "assign-step": openPicker("step", sid); break;
+    case "assign-close": S.picker = null; render(); break;
+    case "pick-person": toggleMember({ id: b.dataset.id }); break;
+    case "pick-label": toggleMember({ label: b.dataset.l }); break;
+    case "assign-label": { const t = (S.drafts.assign_q || "").trim().slice(0, 60); if (!t) { toast("Type the person's name first."); return; } S.drafts.assign_q = ""; if (!pickerList().some((m) => !m.id && m.label === t)) toggleMember({ label: t }); break; }
+    case "assign-clear": setMembers([], "Cleared"); break;
+    case "assign-default": setMembers(null, "Back to role default"); break;
     case "archive": S.confirmArchive = true; render(); break;
     case "archive-no": S.confirmArchive = false; render(); break;
     case "archive-yes": S.confirmArchive = false; save(() => data.updateProject(S.me, P(), { archived: true }, { act: "archived" }), "Project archived."); break;
   }
 });
-function assign(m) {
-  const r = S.assignRole; if (!r) return; S.assignRole = null; render();
-  save(() => data.updateProject(S.me, P(), { ["team." + r]: m }, { act: "assigned", note: ROLE[r].name }));
+function openPicker(kind, key) {
+  S.picker = pickerOpen(kind, key) ? null : { kind, key };
+  S.drafts.assign_q = ""; render();
+  if (S.picker) document.getElementById("assign_q")?.focus();
+}
+function pickerList() {
+  const pk = S.picker, p = S.proj; if (!pk || !p) return [];
+  return pk.kind === "role" ? roleMembers(p, pk.key) : stepAssignees(p, STEPS[SIDX[pk.key]]);
+}
+function toggleMember(m) {
+  const list = pickerList(), has = list.some((x) => sameMember(x, m));
+  const next = has ? list.filter((x) => !sameMember(x, m)) : [...list, m];
+  setMembers(next, `${has ? "Removed" : "Added"} ${personName(m)}`);
+}
+/** list = array of members, or null to put a step back on its role's default. */
+function setMembers(list, verb) {
+  const pk = S.picker; if (!pk) return;
+  const clean = list && list.map((m) => (m.id ? { id: m.id } : { label: m.label }));
+  if (pk.kind === "role") {
+    save(() => data.updateProject(S.me, P(), { ["team." + pk.key]: clean || [] }, { act: "assigned", note: `${verb} · ${ROLE[pk.key].name}` }));
+  } else {
+    save(() => data.updateProject(S.me, P(), { [`steps.${pk.key}.assignees`]: clean }, { sid: pk.key, act: "assigned", note: verb }));
+  }
 }
 $app.addEventListener("input", (e) => {
   const t = e.target;
