@@ -4,8 +4,8 @@
 export const firebaseConfig = {
   apiKey: "AIzaSyDV9yGsEVMbr3Zj3rP-NCMC0kTfyCjfxw4",
   authDomain: "bas-engineering-flow.firebaseapp.com",
-  projectId: "bas-engineering-flow"
+  projectId: "bas-engineering-flow",
   storageBucket: "bas-engineering-flow.firebasestorage.app",
-  messagingSenderId: "1:767298007064:web:c925eeaf971fda4110d36d",
-  appId: "PASTE_APP_ID",
+  messagingSenderId: "767298007064",
+  appId: "1:767298007064:web:c925eeaf971fda4110d36d",
 };
