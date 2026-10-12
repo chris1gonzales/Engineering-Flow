@@ -1,0 +1,61 @@
+rules_version = '2';
+
+// Only signed-in people whose email is on the team list can read or write.
+// The team list is the "emails" array in the document config/access,
+// which you edit in the Firebase console. Store emails in lowercase.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null && request.auth.token.email is string;
+    }
+    function onTeam() {
+      return signedIn()
+        && request.auth.token.email.lower()
+           in get(/databases/$(database)/documents/config/access).data.emails;
+    }
+    function isText(v, max) {
+      return v is string && v.size() <= max;
+    }
+
+    // Team list: readable by the team, changed only in the console.
+    match /config/{docId} {
+      allow read: if onTeam();
+      allow write: if false;
+    }
+
+    // Team directory: everyone on the team reads it; each person writes only their own entry.
+    match /users/{uid} {
+      allow read: if onTeam();
+      allow write: if onTeam()
+        && request.auth.uid == uid
+        && isText(request.resource.data.name, 60)
+        && request.resource.data.email == request.auth.token.email.lower();
+    }
+
+    match /projects/{pid} {
+      allow read: if onTeam();
+      allow create: if onTeam()
+        && isText(request.resource.data.name, 120)
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.archived == false;
+      // Anyone on the team can update a project, but not change who created it
+      // or un-archive it. Projects are never deleted from the app.
+      allow update: if onTeam()
+        && request.resource.data.createdBy == resource.data.createdBy
+        && isText(request.resource.data.name, 120)
+        && (resource.data.archived == false || request.resource.data.archived == true);
+      allow delete: if false;
+
+      // Activity log: append-only, and entries must be signed by the writer.
+      match /log/{entryId} {
+        allow read: if onTeam();
+        allow create: if onTeam()
+          && request.resource.data.by == request.auth.uid
+          && isText(request.resource.data.act, 30)
+          && isText(request.resource.data.note, 2000);
+        allow update, delete: if false;
+      }
+    }
+  }
+}
