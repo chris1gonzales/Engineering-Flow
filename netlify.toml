@@ -2,6 +2,8 @@
 [build]
   command = "npm run build"
   publish = "public"
+  [build.environment]
+  SECRETS_SCAN_OMIT_PATHS = "node_modules/**,public/config.js"
 
 [[headers]]
   for = "/sw.js"
