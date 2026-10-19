@@ -192,3 +192,6 @@ textarea{width:100%;resize:vertical;min-height:58px}
 .assignrow .btn{margin-left:auto}
 .hits button.on{background:var(--accent-soft)}
 .hits .tick{width:14px;text-align:center;color:var(--accent);font-weight:700;flex:none}
+.tag.ooo{border-color:var(--warn);color:var(--warn);background:var(--warn-soft)}
+.checks.locked label{cursor:not-allowed;color:var(--muted)}
+.lock-note{font-size:12.5px}

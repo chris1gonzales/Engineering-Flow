@@ -1,5 +1,5 @@
 import * as data from "./data.js";
-import { ROLES, ROLE, PHASES, STEPS, SIDX, scopeOf, inScope, retTarget, downstream } from "./flow.js";
+import { ROLES, ROLE, PHASES, STEPS, SIDX, scopeOf, inScope, retTarget, downstream, canEditChecklist } from "./flow.js";
 
 const STAT_LABEL = { waiting: "Waiting", todo: "Ready", progress: "In progress", blocked: "Blocked", done: "Done", skipped: "Not in scope" };
 
@@ -54,7 +54,7 @@ async function save(fn, okMsg) {
   try { await fn(); if (okMsg) toast(okMsg); }
   catch (e) {
     console.error(e);
-    toast(e && e.code === "permission-denied" ? "You don't have access to change this board." : "Could not save. Check your connection and try again.");
+    toast(e && e.code === "permission-denied" ? "You don't have permission to make that change." : "Could not save. Check your connection and try again.");
   }
 }
 window.addEventListener("online", () => { S.online = true; render(); });
@@ -135,10 +135,12 @@ function depOk(p, id) { const s = STEPS[SIDX[id]]; return inScope(p, s) ? stepDa
 function effStatus(p, s) {
   if (!inScope(p, s)) return "skipped";
   const d = stepData(p, s.id);
-  if (d.status === "done") return "done";
-  if (s.deps.some((x) => !depOk(p, x))) return "waiting";
-  return d.status === "progress" || d.status === "blocked" ? d.status : "todo";
+  // Work recorded on a step always shows, even if earlier steps aren't finished.
+  if (d.status === "done" || d.status === "progress" || d.status === "blocked") return d.status;
+  return s.deps.some((x) => !depOk(p, x)) ? "waiting" : "todo";
 }
+/** Started or finished before the steps it normally follows. */
+const outOfOrder = (p, s) => !!p && inScope(p, s) && ["progress", "blocked", "done"].includes(stepData(p, s.id).status) && s.deps.some((x) => !depOk(p, x));
 // Assignments: each role holds a list of people (the default for its steps);
 // a step can override with its own list. Older single-person data still reads.
 const asList = (v) => (Array.isArray(v) ? v : v ? [v] : []).filter((m) => m && (m.id || m.label));
@@ -175,7 +177,7 @@ function renderTop() {
       ${S.projects.length ? `<label class="label" for="pick">Project</label><select id="pick" data-act="pick">${opts}</select>` : ""}
       <div class="seg" role="group" aria-label="Filter steps"><button data-act="mine" data-v="0" aria-pressed="${!S.mine}">All steps</button><button data-act="mine" data-v="1" aria-pressed="${S.mine}">My steps</button></div>
       <button class="btn primary" data-act="newp">New project</button>
-      <span class="me">${avatarHTML({ id: S.me.id }, S.me.name)}<span>${esc(S.me.name)}</span><button class="btn sm" data-act="signout">Sign out</button></span>
+      <span class="me">${avatarHTML({ id: S.me.id }, S.me.name)}<span>${esc(S.me.name)}</span>${(() => { const on = (S.team.find((u) => u.id === S.me.id) || {}).emailAlerts !== false; return `<button class="btn sm" data-act="alerts" data-on="${on ? 1 : 0}" aria-pressed="${on}" title="Emails when work is ready for you, plus a weekday morning summary">Email alerts: ${on ? "On" : "Off"}</button>`; })()}<button class="btn sm" data-act="signout">Sign out</button></span>
     </div></div>
     <div class="sync ${S.online ? "" : "off"}">${esc(sync)}</div>`;
 }
@@ -251,6 +253,7 @@ function renderStep(p, s) {
       <span style="min-width:0"><span class="stitle">${esc(s.title)}</span>
         <span class="smeta"><span class="tag">${ROLE[s.role].code}</span>${p ? whoListHTML(stepAssignees(p, s)) : `<span>${esc(ROLE[s.role].name)}</span>`}${kindTag}
         ${d.returned && st !== "done" ? `<span class="tag red">RETURNED</span>` : ""}
+        ${outOfOrder(p, s) ? `<span class="tag ooo" title="Started before the steps it normally follows were finished">OUT OF ORDER</span>` : ""}
         ${s.id === "s03" && p && p.rev ? `<span class="tag">Rev ${revLetter(p.rev)}</span>` : ""}
         ${d.due ? `<span class="tag ${late ? "late" : ""}">Due ${esc(d.due)}</span>` : ""}
         <span>${nChk}/${s.checks.length} checks</span>
@@ -261,12 +264,13 @@ function renderStep(p, s) {
   const pend = (id) => { const t = STEPS[SIDX[id]]; return inScope(p, t) ? (stepData(p, id).status === "done" ? [] : [t]) : t.deps.flatMap(pend); };
   const waitingOn = p ? [...new Set(s.deps.flatMap(pend))] : [];
   const tgt = p && retTarget(p, s);
+  const mayCheck = !!p && canEditChecklist(p, s.id, S.me && S.me.id);
   let actions = "";
   if (p) {
-    if (st === "waiting") actions = `<span class="hint">Waiting on ${waitingOn.map((w) => `<b>${w.id.slice(1)} ${esc(w.title)}</b>`).join(", ")}.</span>`;
-    else if (st === "done") actions = `<button class="btn sm" data-act="reopen" data-s="${s.id}">Reopen</button>`;
+    if (waitingOn.length && st !== "done") actions = `<p class="hint" style="margin:0;flex-basis:100%">${st === "waiting" ? "Normally follows" : "Ahead of"} ${waitingOn.map((w) => `<b>${w.id.slice(1)} ${esc(w.title)}</b>`).join(", ")}. You can still work this step now.</p>`;
+    if (st === "done") actions = `<button class="btn sm" data-act="reopen" data-s="${s.id}">Reopen</button>`;
     else {
-      if (st === "todo") actions += `<button class="btn primary" data-act="start" data-s="${s.id}">Start</button>`;
+      if (st === "todo" || st === "waiting") actions += `<button class="btn primary" data-act="start" data-s="${s.id}">Start</button>`;
       if (st === "blocked") actions += `<button class="btn" data-act="unblock" data-s="${s.id}">Clear block</button>`;
       if (s.kind === "task") actions += `<button class="btn ok" data-act="done" data-s="${s.id}">Mark done</button>`;
       if (s.kind === "review") actions += `<button class="btn ok" data-act="approve" data-s="${s.id}" data-o="Approved">Approve</button>`;
@@ -284,7 +288,8 @@ function renderStep(p, s) {
       <p class="hint" style="margin:0">${esc(s.hint)}</p>
       ${d.returned && st !== "done" && d.returnNote ? `<div class="redbox"><b>Returned:</b> ${esc(d.returnNote)}</div>` : ""}
       ${p ? renderStepAssign(p, s) : ""}
-      <ul class="checks">${s.checks.map((c, i) => `<li class="${checks[i] ? "on" : ""}"><label><input type="checkbox" id="chk_${s.id}_${i}" data-act="check" data-s="${s.id}" data-i="${i}" ${checks[i] ? "checked" : ""}${!p || st === "waiting" ? " disabled" : ""}><span>${esc(c)}</span></label></li>`).join("")}</ul>
+      <ul class="checks${p && !mayCheck ? " locked" : ""}">${s.checks.map((c, i) => `<li class="${checks[i] ? "on" : ""}"><label><input type="checkbox" id="chk_${s.id}_${i}" data-act="check" data-s="${s.id}" data-i="${i}" ${checks[i] ? "checked" : ""}${!p || !mayCheck ? " disabled" : ""}><span>${esc(c)}</span></label></li>`).join("")}</ul>
+      ${p && !mayCheck ? `<p class="hint lock-note" style="margin:0">Only the people assigned to this step, the Project Manager, or the project's creator can tick these boxes.</p>` : ""}
       <div class="actions">${actions}</div>
       ${ret}
       ${p ? `<div class="row2"><label class="label" for="due_${s.id}">Due</label><input type="date" id="due_${s.id}" data-act="due" data-s="${s.id}" value="${esc(d.due || "")}"></div>
@@ -371,7 +376,7 @@ function returnWork(sid, note) {
   for (const id of downstream(target)) {
     Object.assign(fields, id === target
       ? stepFields(id, { status: "progress", returned: true, returnNote: note })
-      : stepFields(id, { status: "todo", checks: [], outcome: null, returned: false }));
+      : stepFields(id, { status: "todo", outcome: null, returned: false }));
   }
   S.expanded.add(target);
   return save(() => data.updateProject(S.me, P(), fields, { sid, act: s.kind === "gate" ? "resubmit" : "returned", note }, { bumpRev: target === "s03" }), "Returned with comments.");
@@ -389,6 +394,7 @@ $app.addEventListener("click", (e) => {
     case "newp": S.showNew = true; render(); document.getElementById("np_name")?.focus(); break;
     case "cancelnew": S.showNew = false; render(); break;
     case "signout": stopWatching(); data.signOutNow(); break;
+    case "alerts": { const on = b.dataset.on !== "1"; save(() => data.setEmailAlerts(on), on ? "Email alerts on." : "Email alerts off."); break; }
     case "start": stepAct(sid, { status: "progress" }, "started"); break;
     case "done": { const s = STEPS[SIDX[sid]], c = (stepData(p, sid).checks || []).filter(Boolean).length;
       stepAct(sid, { status: "done", returned: false }, "done", c < s.checks.length ? `${s.checks.length - c} checklist item(s) left open` : ""); break; }
@@ -432,11 +438,15 @@ function toggleMember(m) {
 /** list = array of members, or null to put a step back on its role's default. */
 function setMembers(list, verb) {
   const pk = S.picker; if (!pk) return;
+  const before = pickerList();
   const clean = list && list.map((m) => (m.id ? { id: m.id } : { label: m.label }));
+  const after = clean || (pk.kind === "step" ? roleMembers(S.proj, STEPS[SIDX[pk.key]].role) : []);
+  // People newly on this role/step get an email (see netlify/functions/notify.mjs).
+  const added = after.filter((m) => m.id && !before.some((b) => b.id === m.id)).map((m) => m.id);
   if (pk.kind === "role") {
-    save(() => data.updateProject(S.me, P(), { ["team." + pk.key]: clean || [] }, { act: "assigned", note: `${verb} · ${ROLE[pk.key].name}` }));
+    save(() => data.updateProject(S.me, P(), { ["team." + pk.key]: clean || [] }, { act: "assigned", note: `${verb} · ${ROLE[pk.key].name}`, extra: { added, target: { role: pk.key } } }));
   } else {
-    save(() => data.updateProject(S.me, P(), { [`steps.${pk.key}.assignees`]: clean }, { sid: pk.key, act: "assigned", note: verb }));
+    save(() => data.updateProject(S.me, P(), { [`steps.${pk.key}.assignees`]: clean }, { sid: pk.key, act: "assigned", note: verb, extra: { added, target: { step: pk.key } } }));
   }
 }
 $app.addEventListener("input", (e) => {
@@ -457,8 +467,9 @@ $app.addEventListener("change", (e) => {
   if (t.dataset.act === "pick") { S.pid = t.value; store.set("sgf_pid", S.pid); S.proj = S.projects.find((x) => x.id === S.pid) || null; S.expanded.clear(); watchLog(); render(); return; }
   if (t.dataset.act === "check") {
     const sid = t.dataset.s, i = +t.dataset.i, s = STEPS[SIDX[sid]];
+    if (!canEditChecklist(p, sid, S.me.id)) { t.checked = !t.checked; toast("Only this step's assignees, the PM or the project creator can tick these."); return; }
     const arr = s.checks.map((_, k) => !!((stepData(p, sid).checks || [])[k])); arr[i] = t.checked;
-    const f = { checks: arr }; if (effStatus(p, s) === "todo" && t.checked) f.status = "progress";
+    const f = { checks: arr }; if (["todo", "waiting"].includes(effStatus(p, s)) && t.checked) f.status = "progress";
     stepAct(sid, f); return;
   }
   if (t.dataset.act === "due") stepAct(t.dataset.s, { due: t.value || null });

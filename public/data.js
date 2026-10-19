@@ -48,13 +48,27 @@ function shapeProject(id, x) {
   return {
     id, name: x.name, number: x.number || "", customer: x.customer || "",
     scope: x.scope || {}, team: x.team || {}, rev: x.rev || 0, archived: !!x.archived,
-    steps: x.steps || {}, createdAt: ms(x.createdAt), updatedAt: ms(x.updatedAt),
+    steps: x.steps || {}, createdBy: x.createdBy || null, createdAt: ms(x.createdAt), updatedAt: ms(x.updatedAt),
   };
 }
 
 /* ---------- writes ---------- */
-function logEntry(me, sid, act, note) {
-  return { sid: sid || null, act, note: String(note || "").slice(0, 2000), by: me.id, byName: me.name, at: serverTimestamp() };
+function logEntry(me, sid, act, note, extra) {
+  return { ...(extra || {}), sid: sid || null, act, note: String(note || "").slice(0, 2000), by: me.id, byName: me.name, at: serverTimestamp() };
+}
+
+// Actions that can mean someone else now has work: ask the server to email them.
+const ALERT_ACTS = new Set(["done", "approved", "returned", "resubmit", "assigned", "blocked"]);
+async function requestAlerts(pid, logId) {
+  try {
+    const token = await auth.currentUser.getIdToken();
+    await fetch("/api/notify", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + token }, body: JSON.stringify({ project: pid, log: logId }) });
+  } catch (e) { console.warn("Email alert request failed", e); }
+}
+/** Turn this person's email alerts on or off. */
+export async function setEmailAlerts(on) {
+  const u = auth.currentUser;
+  await setDoc(doc(db, "users", u.uid), { name: u.displayName || "", email: (u.email || "").toLowerCase(), emailAlerts: !!on }, { merge: true });
 }
 /** Create a project and its first activity entry together. Returns the new id. */
 export async function createProject(me, { name, number, customer, scope }) {
@@ -79,8 +93,10 @@ export async function updateProject(me, pid, fields, activity, { bumpRev = false
   const patch = { ...fields, updatedAt: serverTimestamp() };
   if (bumpRev) patch.rev = increment(1);
   b.update(ref, patch);
-  if (activity) b.set(doc(collection(db, "projects", pid, "log")), logEntry(me, activity.sid, activity.act, activity.note));
+  const logRef = activity ? doc(collection(db, "projects", pid, "log")) : null;
+  if (logRef) b.set(logRef, logEntry(me, activity.sid, activity.act, activity.note, activity.extra));
   await b.commit();
+  if (logRef && ALERT_ACTS.has(activity.act)) requestAlerts(pid, logRef.id); // fire and forget
 }
 export async function addNote(me, pid, sid, note) {
   await updateProject(me, pid, {}, { sid, act: "note", note });

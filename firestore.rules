@@ -18,6 +18,61 @@ service cloud.firestore {
       return v is string && v.size() <= max;
     }
 
+    // ---------- Checklist permission ----------
+    // A step's checklist (steps.<id>.checks) can only be changed by:
+    //   - the people assigned to that step: its own "assignees" list if it has
+    //     one, otherwise the members of its role in "team"
+    //   - the project's Project Manager(s)
+    //   - the person who created the project
+    // Typed-name assignees (no account) can't check anything.
+    // Everything else on a project (status, approvals, assignments, returns,
+    // scope, archive) stays open to the whole team.
+    // The app mirrors this in canEditChecklist() in public/flow.js.
+    function roleList(data, role) {
+      let v = data.get('team', {}).get(role, null);
+      return v is list ? v : (v is map ? [v] : []);
+    }
+    function stepMap(data, sid) {
+      let s = data.get('steps', {}).get(sid, {});
+      return s is map ? s : {};
+    }
+    function assigneesOf(data, sid, role) {
+      let custom = stepMap(data, sid).get('assignees', null);
+      return custom is list ? custom : roleList(data, role);
+    }
+    function meIn(list) {
+      return {'id': request.auth.uid} in list;
+    }
+    function isLead() {
+      return resource.data.get('createdBy', '') == request.auth.uid
+        || meIn(roleList(resource.data, 'pm'));
+    }
+    function checksChanged(sid) {
+      return stepMap(request.resource.data, sid).get('checks', [])
+          != stepMap(resource.data, sid).get('checks', []);
+    }
+    // Assignment is judged on the project as it was before this write.
+    function mayCheck(sid, role) {
+      return !checksChanged(sid) || isLead() || meIn(assigneesOf(resource.data, sid, role));
+    }
+    // BEGIN GENERATED STEP LIST (npm run rules)
+    function checklistsAllowed() {
+      return mayCheck('s01', 'pm')
+        && mayCheck('s02', 'eng')
+        && mayCheck('s03', 'cad')
+        && mayCheck('s04', 'eng')
+        && mayCheck('s05', 'pm')
+        && mayCheck('s06', 'pm')
+        && mayCheck('s07', 'prog')
+        && mayCheck('s08', 'gfx')
+        && mayCheck('s09', 'gfx')
+        && mayCheck('s10', 'prog')
+        && mayCheck('s11', 'eng')
+        && mayCheck('s12', 'cad')
+        && mayCheck('s13', 'pm');
+    }
+    // END GENERATED STEP LIST
+
     // Team list: readable by the team, changed only in the console.
     match /config/{docId} {
       allow read: if onTeam();
@@ -39,12 +94,14 @@ service cloud.firestore {
         && isText(request.resource.data.name, 120)
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.archived == false;
-      // Anyone on the team can update a project, but not change who created it
-      // or un-archive it. Projects are never deleted from the app.
+      // Anyone on the team can update a project, but not change who created it,
+      // un-archive it, or change a checklist they aren't allowed to (see above).
+      // Projects are never deleted from the app.
       allow update: if onTeam()
         && request.resource.data.createdBy == resource.data.createdBy
         && isText(request.resource.data.name, 120)
-        && (resource.data.archived == false || request.resource.data.archived == true);
+        && (resource.data.archived == false || request.resource.data.archived == true)
+        && checklistsAllowed();
       allow delete: if false;
 
       // Activity log: append-only, and entries must be signed by the writer.

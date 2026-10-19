@@ -82,3 +82,42 @@ export function downstream(id) {
   }
   return out;
 }
+
+/* ---------- shared status + assignment logic (used by email alerts) ---------- */
+export const asList = (v) => (Array.isArray(v) ? v : v ? [v] : []).filter((m) => m && (m.id || m.label));
+export const stepState = (p, id) => (p && p.steps && p.steps[id]) || {};
+export function depsMet(p, id) {
+  const s = STEPS[SIDX[id]];
+  return inScope(p, s) ? stepState(p, id).status === "done" : s.deps.every((x) => depsMet(p, x));
+}
+/** waiting | todo | progress | blocked | done | skipped */
+export function statusOf(p, s) {
+  if (!inScope(p, s)) return "skipped";
+  const d = stepState(p, s.id);
+  if (d.status === "done" || d.status === "progress" || d.status === "blocked") return d.status;
+  return s.deps.some((x) => !depsMet(p, x)) ? "waiting" : "todo";
+}
+export const roleMembersOf = (p, role) => asList(p && p.team && p.team[role]);
+export function assigneesOf(p, s) {
+  const d = stepState(p, s.id);
+  return Array.isArray(d.assignees) ? asList(d.assignees) : roleMembersOf(p, s.role);
+}
+/** True if step `s` waits on step `id`, directly or through steps that are out of scope. */
+export function waitsOn(p, s, id) {
+  return s.deps.some((d) => d === id || (!inScope(p, STEPS[SIDX[d]]) && waitsOn(p, STEPS[SIDX[d]], id)));
+}
+
+/* ---------- checklist permission (mirrored in firestore.rules) ---------- */
+/**
+ * Who may tick or untick a step's checklist: the step's assignees (account
+ * holders only, not typed names), the project's PMs, and the project creator.
+ * firestore.rules enforces the same thing; keep the two in sync
+ * (run `npm run rules` after changing step roles).
+ */
+export function canEditChecklist(p, stepId, uid) {
+  if (!p || !uid) return false;
+  if (p.createdBy === uid) return true;
+  if (roleMembersOf(p, "pm").some((m) => m.id === uid)) return true;
+  const s = STEPS[SIDX[stepId]];
+  return !!s && assigneesOf(p, s).some((m) => m.id === uid);
+}

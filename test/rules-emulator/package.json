@@ -1,0 +1,14 @@
+{
+  "name": "bas-flow-rules-test",
+  "private": true,
+  "type": "module",
+  "description": "Runs firestore.rules in the Firebase emulator. Needs Java 11+.",
+  "scripts": {
+    "test": "firebase emulators:exec --only firestore --project demo-bas-flow \"node rules.test.mjs\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "5.0.2",
+    "firebase": "12.19.0",
+    "firebase-tools": "15.33.0"
+  }
+}

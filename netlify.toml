@@ -1,9 +1,19 @@
-# Static site: Netlify only serves files. Sign-in and data are on Firebase.
+# Netlify serves the page and runs two small email functions. Sign-in and data are on Firebase.
 [build]
   command = "npm run build"
   publish = "public"
-  [build.environment]
+
+# Netlify's secret scanner flags Firebase web API keys ("AIza..."). These are
+# public by design (access is enforced by firestore.rules), and the examples in
+# node_modules are Firebase's own sample values.
+[build.environment]
   SECRETS_SCAN_OMIT_PATHS = "node_modules/**,public/config.js"
+  NODE_VERSION = "22"
+
+# Email alerts: netlify/functions/notify.mjs (on actions) and digest.mjs (weekday mornings).
+[functions]
+  node_bundler = "esbuild"
+  external_node_modules = ["firebase-admin"]
 
 [[headers]]
   for = "/sw.js"

@@ -3,7 +3,10 @@
 // (dotted-path updates, increment on rev, append-only log).
 export const configured = true;
 const me = { id: "u-chris", email: "chris@appliedbas.test", name: "Chris" };
-const db = { users: { "u-chris": { name: "Chris", email: me.email }, "u-dana": { name: "Dana Ortiz", email: "dana@appliedbas.test" } }, projects: {}, logs: {} };
+const db = { users: { "u-chris": { name: "Chris", email: me.email }, "u-dana": { name: "Dana Ortiz", email: "dana@appliedbas.test" }, "u-sam": { name: "Sam Patel", email: "sam@appliedbas.test" } }, projects: {}, logs: {} };
+// Tests can preload a project (window.__seedProject) to view the board as a
+// non-creator, non-PM user.
+if (typeof window !== "undefined" && window.__seedProject) { const sp = window.__seedProject; db.projects[sp.id] = sp; db.logs[sp.id] = []; }
 const subs = new Set();
 const emit = () => setTimeout(() => subs.forEach((f) => f()), 0);
 let userCb;
@@ -27,7 +30,7 @@ function setPath(obj, path, val) {
 let n = 0;
 export async function createProject(m, { name, number, customer, scope }) {
   const id = "p" + ++n;
-  db.projects[id] = { id, name, number, customer, scope, team: { pm: { id: m.id } }, rev: 0, archived: false, steps: {}, createdAt: Date.now(), updatedAt: Date.now() };
+  db.projects[id] = { id, name, number, customer, scope, team: { pm: { id: m.id } }, createdBy: m.id, rev: 0, archived: false, steps: {}, createdAt: Date.now(), updatedAt: Date.now() };
   db.logs[id] = [{ id: "l" + Date.now(), act: "created", note: "", by: m.id, byName: m.name, at: Date.now(), sid: null }];
   emit(); return id;
 }
@@ -40,3 +43,4 @@ export async function updateProject(m, pid, fields, activity, { bumpRev = false 
   emit();
 }
 export const addNote = (m, pid, sid, note) => updateProject(m, pid, {}, { sid, act: "note", note });
+export async function setEmailAlerts(on) { db.users[me.id].emailAlerts = !!on; emit(); }
